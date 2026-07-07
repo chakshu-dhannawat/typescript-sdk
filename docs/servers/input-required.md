@@ -39,6 +39,8 @@ server.registerTool(
 
 The first round converts `confirmationSchema` to MCP's restricted elicitation JSON Schema and returns it inside `resultType: 'input_required'`. The client fulfils the request and retries `deploy`; on re-entry `acceptedContent` validates the answer with that same schema and the handler finishes.
 
+The restricted wire schema is a flat object of primitive properties, so only schemas that convert to that shape are accepted: strings (including the `email`, `uri`, `date`, and `date-time` formats — `z.email()`, `z.iso.date()`, and friends), numbers and their bounds, booleans, enums (`z.enum` or `z.literal(['a', 'b'])` — a union of literals does not convert), multi-select enum arrays, `.optional()`, and `.default()`. Anything the wire cannot express — nested objects, `.regex()` patterns, customized format patterns — throws a `TypeError` when the request is built, before anything is sent. Constraints the wire cannot advertise at all (refinements, transforms) still hold on re-entry, because `acceptedContent` validates with the original schema.
+
 Every call on this page comes from an in-memory `Client` with an `elicitation/create` handler — [Test a server](../testing.md) shows that wiring. Calling `deploy` once produces both rounds:
 
 ```

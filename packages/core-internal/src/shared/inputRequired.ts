@@ -61,7 +61,17 @@ interface InputRequiredBuilder {
      */
     (spec: InputRequiredSpec): InputRequiredResult;
 
-    /** Builds an embedded form-mode elicitation request (`elicitation/create`). */
+    /**
+     * Builds an embedded form-mode elicitation request (`elicitation/create`).
+     *
+     * `requestedSchema` takes a wire-ready elicitation JSON Schema or a Standard Schema
+     * (e.g. a Zod object), converted to the restricted wire shape immediately. Shapes
+     * the wire cannot express throw a `TypeError` before anything is sent — nested
+     * objects, `.regex()` and customized format patterns, literal unions (use `z.enum`
+     * or `z.literal(['a', 'b'])`); supported formats are `email`, `uri`, `date`, and
+     * `date-time`. The schema shapes the outgoing request only: on re-entry, pass it to
+     * `acceptedContent(responses, key, schema)` for validated, typed content.
+     */
     elicit(params: ElicitInputParams): InputRequest;
 
     /**

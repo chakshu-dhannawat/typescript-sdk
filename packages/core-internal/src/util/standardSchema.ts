@@ -8,6 +8,8 @@
 
 import * as z from 'zod/v4';
 
+import type { StringSchema } from '../types/types';
+
 // Standard Schema interfaces — vendored from https://standardschema.dev (spec v1, Jan 2025)
 
 export interface StandardTypedV1<Input = unknown, Output = Input> {
@@ -165,6 +167,14 @@ export function isStandardSchemaWithJSON(schema: unknown): schema is StandardSch
 let warnedZodFallback = false;
 
 /**
+ * JSON Schema draft targeted by every Standard Schema conversion. Shared so
+ * consumers that compare converted output against locally-derived references
+ * (e.g. the elicitation format-pattern check in shared/elicitation.ts) stay in
+ * lockstep with the conversions below.
+ */
+export const JSON_SCHEMA_CONVERSION_TARGET = 'draft-2020-12';
+
+/**
  * Converts a StandardSchema to JSON Schema for use as an MCP tool/prompt schema.
  *
  * MCP requires `type: "object"` at the root of tool `inputSchema` and prompt
@@ -179,7 +189,7 @@ export function standardSchemaToJsonSchema(schema: StandardJSONSchemaV1, io: 'in
     const std = schema['~standard'];
     let result: Record<string, unknown>;
     if (std.jsonSchema) {
-        result = std.jsonSchema[io]({ target: 'draft-2020-12' });
+        result = std.jsonSchema[io]({ target: JSON_SCHEMA_CONVERSION_TARGET });
     } else if (std.vendor === 'zod') {
         // zod 4.0–4.1 implements StandardSchemaV1 but not StandardJSONSchemaV1 (`~standard.jsonSchema`).
         // The SDK already bundles zod 4, so fall back to its converter rather than crashing on tools/list.
@@ -198,7 +208,7 @@ export function standardSchemaToJsonSchema(schema: StandardJSONSchemaV1, io: 'in
                     'Falling back to z.toJSONSchema(). Upgrade to zod >=4.2.0 to silence this warning.'
             );
         }
-        result = z.toJSONSchema(schema as unknown as z.ZodType, { target: 'draft-2020-12', io }) as Record<string, unknown>;
+        result = z.toJSONSchema(schema as unknown as z.ZodType, { target: JSON_SCHEMA_CONVERSION_TARGET, io }) as Record<string, unknown>;
     } else {
         throw new Error(
             `Schema library "${std.vendor}" does not implement StandardJSONSchemaV1 (\`~standard.jsonSchema\`). ` +
@@ -273,6 +283,76 @@ export async function validateStandardSchema<T extends StandardSchemaV1>(
         return { success: false, error: result.issues.map(i => formatIssue(i)).join(', ') };
     }
     return { success: true, data: (result as StandardSchemaV1.SuccessResult<unknown>).value as StandardSchemaV1.InferOutput<T> };
+}
+
+/*
+ * Format-companion patterns. Schema libraries realize a string `format` check as a
+ * companion `pattern` regex; a consumer that can carry `format` but not `pattern` (the
+ * restricted elicitation wire schema) needs to know whether a pattern is the library's
+ * own realization of the format — droppable, since `format` still rides — or a user
+ * customization that must not be silently weakened. For zod the exact patterns are
+ * derivable from the resolved zod at runtime (never vendored — in-range zod releases
+ * may change them), under the same conversion options standardSchemaToJsonSchema uses.
+ * Other vendors' realizations are unknowable from here (e.g. ArkType's `string.email`
+ * bakes in its own regex), so a pattern beside a matching format is trusted as the
+ * library's own.
+ */
+
+function zodEmittedPattern(schema: z.ZodType): string | undefined {
+    const jsonSchema = z.toJSONSchema(schema, { target: JSON_SCHEMA_CONVERSION_TARGET, io: 'input' }) as Record<string, unknown>;
+    return typeof jsonSchema.pattern === 'string' ? jsonSchema.pattern : undefined;
+}
+
+const DATETIME_FRACTION_DIGITS = /\\\.\\d\{(\d+)\}/;
+
+function datetimeReferenceSchemas(pattern: string): z.ZodType[] {
+    // The emitted pattern depends on the authoring options; the fraction-digit count
+    // recovered from the pattern under test keeps the candidate set finite.
+    const fractionDigits = DATETIME_FRACTION_DIGITS.exec(pattern);
+    const precisions: Array<number | undefined> = [undefined, -1, 0];
+    if (fractionDigits) {
+        precisions.push(Number(fractionDigits[1]));
+    }
+    return [false, true].flatMap(local =>
+        [false, true].flatMap(offset => precisions.map(precision => z.iso.datetime({ local, offset, precision })))
+    );
+}
+
+// Exhaustive over the wire's format enum — a spec revision adding a format is a compile
+// error here instead of a silent rejection.
+function referencePatternsForFormat(format: NonNullable<StringSchema['format']>, pattern: string): ReadonlySet<string> {
+    let referenceSchemas: z.ZodType[];
+    switch (format) {
+        case 'email': {
+            referenceSchemas = [z.email()];
+            break;
+        }
+        case 'uri': {
+            referenceSchemas = [z.url()];
+            break;
+        }
+        case 'date': {
+            referenceSchemas = [z.iso.date()];
+            break;
+        }
+        case 'date-time': {
+            referenceSchemas = datetimeReferenceSchemas(pattern);
+            break;
+        }
+    }
+    return new Set(referenceSchemas.map(schema => zodEmittedPattern(schema)).filter((emitted): emitted is string => emitted !== undefined));
+}
+
+/**
+ * Whether `pattern` is the schema library's own regex realization of `format` (droppable
+ * by consumers that carry `format` but not `pattern`), as opposed to a user customization
+ * that must not be silently dropped. See the block comment above for the per-vendor rule.
+ */
+export function isLibraryFormatPattern(format: NonNullable<StringSchema['format']>, pattern: string, vendor: string): boolean {
+    if (vendor !== 'zod') {
+        return true;
+    }
+    return referencePatternsForFormat(format, pattern).has(pattern);
 }
 
 // Prompt argument extraction
