@@ -973,10 +973,19 @@ export class StreamableHTTPClientTransport implements Transport {
 
             const response = await (this._fetch ?? fetch)(this._url, init);
 
-            // Handle session ID received during initialization
-            const sessionId = response.headers.get('mcp-session-id');
-            if (sessionId) {
-                this._sessionId = sessionId;
+            // Capture the server-assigned session id only from successful
+            // responses (the spec assigns it on the InitializeResult
+            // response). An error reply must contribute nothing to session
+            // state: a 404 to a version-negotiation probe that carries an
+            // `mcp-session-id` header would otherwise poison the legacy
+            // fallback handshake — the follow-up `initialize` presents a
+            // session id the server never issued, which spec-conforming
+            // stateful servers reject.
+            if (response.ok) {
+                const sessionId = response.headers.get('mcp-session-id');
+                if (sessionId) {
+                    this._sessionId = sessionId;
+                }
             }
 
             if (!response.ok) {
