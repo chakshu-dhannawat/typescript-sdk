@@ -532,10 +532,6 @@ export class StreamableHTTPClientTransport implements Transport {
             });
 
             if (!response.ok) {
-                // 404 to a request that carried the session id: session is gone (spec).
-                if (response.status === 404 && headers.get('mcp-session-id') !== null) {
-                    this._sessionId = undefined;
-                }
                 if (response.status === 401 && this._authProvider) {
                     if (response.headers.has('www-authenticate')) {
                         const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
@@ -988,9 +984,10 @@ export class StreamableHTTPClientTransport implements Transport {
             }
 
             if (!response.ok) {
-                // Spec: a 404 to a request that carried a session id means
-                // the session is gone — drop it so the next attempt starts a
-                // fresh handshake instead of re-presenting a dead id.
+                // Spec: a 404 to a POST that carried the session id means the
+                // session is gone — drop it so the next attempt can start a
+                // fresh handshake. POST only: SSE reconnect GETs can 404 for
+                // transient infra reasons while the session is still live.
                 if (response.status === 404 && headers.get('mcp-session-id') !== null) {
                     this._sessionId = undefined;
                 }
