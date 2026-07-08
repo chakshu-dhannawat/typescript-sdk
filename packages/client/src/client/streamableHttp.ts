@@ -532,6 +532,10 @@ export class StreamableHTTPClientTransport implements Transport {
             });
 
             if (!response.ok) {
+                // 404 to a request that carried the session id: session is gone (spec).
+                if (response.status === 404 && headers.get('mcp-session-id') !== null) {
+                    this._sessionId = undefined;
+                }
                 if (response.status === 401 && this._authProvider) {
                     if (response.headers.has('www-authenticate')) {
                         const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
@@ -973,14 +977,9 @@ export class StreamableHTTPClientTransport implements Transport {
 
             const response = await (this._fetch ?? fetch)(this._url, init);
 
-            // Capture the server-assigned session id only from successful
-            // responses (the spec assigns it on the InitializeResult
-            // response). An error reply must contribute nothing to session
-            // state: a 404 to a version-negotiation probe that carries an
-            // `mcp-session-id` header would otherwise poison the legacy
-            // fallback handshake — the follow-up `initialize` presents a
-            // session id the server never issued, which spec-conforming
-            // stateful servers reject.
+            // Capture the session id only from successful responses — the
+            // spec assigns it on the InitializeResult response. An error
+            // reply (e.g. a 404 to a probe) must not inject session state.
             if (response.ok) {
                 const sessionId = response.headers.get('mcp-session-id');
                 if (sessionId) {
@@ -989,6 +988,12 @@ export class StreamableHTTPClientTransport implements Transport {
             }
 
             if (!response.ok) {
+                // Spec: a 404 to a request that carried a session id means
+                // the session is gone — drop it so the next attempt starts a
+                // fresh handshake instead of re-presenting a dead id.
+                if (response.status === 404 && headers.get('mcp-session-id') !== null) {
+                    this._sessionId = undefined;
+                }
                 if (response.status === 401 && this._authProvider) {
                     // Store WWW-Authenticate params for interactive finishAuth() path
                     if (response.headers.has('www-authenticate')) {
