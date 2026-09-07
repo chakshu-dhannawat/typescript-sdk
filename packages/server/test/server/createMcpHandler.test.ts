@@ -809,6 +809,26 @@ describe('createMcpHandler — close()', () => {
         await handler.close();
         await expect(handler.fetch(postRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }))).rejects.toThrow(/closed/);
     });
+
+    it('does not chain server.onclose closures when the same McpServer is reused', async () => {
+        const shared = new McpServer({ name: 'reused-server', version: '1.0.0' });
+        shared.registerTool('echo', { inputSchema: z.object({ text: z.string() }) }, async ({ text }) => ({
+            content: [{ type: 'text', text }]
+        }));
+        const handler = createMcpHandler(() => shared);
+
+        const first = await handler.fetch(postRequest(modernToolsCall('echo', { text: 'first' })));
+        expect(first.status).toBe(200);
+        const firstOnClose = shared.server.onclose;
+
+        for (let i = 0; i < 10; i += 1) {
+            const response = await handler.fetch(postRequest(modernToolsCall('echo', { text: `req-${i}` })));
+            expect(response.status).toBe(200);
+        }
+
+        expect(shared.server.onclose).toBe(firstOnClose);
+        await handler.close();
+    });
 });
 
 // Type-level pin: a zero-argument factory stays assignable to McpServerFactory unchanged.
